@@ -55,12 +55,12 @@ export default function MacroGraph() {
 
   return (
     <div className="flex h-screen">
-      <div className="w-1/4 p-4 border-r overflow-y-auto">
+      <div className="w-1/2 p-4 border-r overflow-y-auto">
         <MacroNodeForm />
       </div>
-      <div className="flex-1" style={{ height: '100vh' }}>
+      <div className="flex-1" style={{ height: '100vh' , width: '400vh'}}>
         <ReactFlow
-          style={{ width: '100%', height: '100%' }}
+          style={{ width: '1000%', height: '100%' }}
           nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}

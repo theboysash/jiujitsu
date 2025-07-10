@@ -1,43 +1,46 @@
-import { useState, type ChangeEvent } from 'react';
+// src/components/MicroNodeFormLocal.tsx
+import { useState } from 'react';
 
-type Props = {
-  onAdd: (data: { name: string; type: 'variant' | 'decision' | 'outcome' }) => void;
-};
+export type NodeType = 'variant' | 'myMove' | 'opponentMove' | 'outcome';
+
+interface Props {
+  onAdd: (data: { name: string; type?: NodeType }) => void;
+}
 
 export default function MicroNodeFormLocal({ onAdd }: Props) {
   const [name, setName] = useState('');
-  const [type, setType] = useState<'variant' | 'decision' | 'outcome'>('variant');
+  const [type, setType] = useState<NodeType>('variant');
 
-  const handleSubmit = () => {
+  const handleAdd = () => {
     if (!name.trim()) return;
-    onAdd({ name: name.trim(), type });
+    onAdd({ name, type });
     setName('');
+    setType('variant');
   };
 
   return (
-    <div className="space-y-2">
-      <h2 className="text-lg font-semibold">Add Micro Node</h2>
-
+    <div className="p-4 border rounded bg-white shadow-md mt-4">
+      <h2 className="text-lg font-semibold mb-2">Create Manual Node</h2>
       <input
-        className="w-full border rounded p-2"
+        type="text"
+        placeholder="Node Label"
         value={name}
-        placeholder="Technique or state name"
-        onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
+        onChange={(e) => setName(e.target.value)}
+        className="border px-2 py-1 rounded w-full mb-2"
       />
-
       <select
-        className="w-full border rounded p-2"
         value={type}
-        onChange={(e) => setType(e.target.value as 'variant' | 'decision' | 'outcome')}
+        onChange={(e) => setType(e.target.value as NodeType)}
+        className="border px-2 py-1 rounded w-full mb-2"
       >
-        <option value="variant">Variant (e.g., Knee Shield)</option>
-        <option value="decision">Decision (fork/opponent action)</option>
-        <option value="outcome">Outcome (sweep, submission)</option>
+        <option value="variant">Variant</option>
+        <option value="myMove">My Move</option>
+        <option value="opponentMove">Opponent Move</option>
+        <option value="outcome">Outcome</option>
       </select>
-
       <button
-        className="w-full bg-green-500 text-white py-2 rounded"
-        onClick={handleSubmit}
+        onClick={handleAdd}
+        className="mt-2 px-4 py-2 bg-blue-600 text-white rounded"
       >
         Add Node
       </button>

@@ -3,6 +3,7 @@ import reactLogo from './assets/react.svg';
 import viteLogo from '/vite.svg';
 import './App.css';
 
+import AnnotatorWrapper from './components/AnnotatorWrapper';
 import MacroGraph from './components/MacroGraph';
 import MicroGraphLocal from './components/MicroGraphLocal';
 
@@ -60,6 +61,11 @@ function App() {
 
           {/* Micro Graph (local only) */}
           <Route path="/micro" element={<MicroGraphLocal />} />
+
+          // App.tsx or your routes file
+          <Route path="/annotate/:youtubeId" element={<AnnotatorWrapper />} />
+
+          
         </Routes>
       </div>
     </Router>
