@@ -8,7 +8,9 @@ import ReactFlow, {
   type Connection,
   type NodeMouseHandler,
   type NodeProps,
-  
+  Handle,
+  Position,
+  ConnectionLineType,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import MicroNodeFormLocal, { type NodeType } from './MicroNodeFormLocal';
@@ -47,6 +49,10 @@ export default function MicroGraphLocal() {
   const [annotationMode, setAnnotationMode] = useState(false);
   const [currentVideoId, setCurrentVideoId] = useState('');
 
+  // Increased spacing to accommodate video nodes
+  const H_SPACING = 400; // Increased from 180 to 240 (video width 160 + padding)
+  const V_SPACING = 240; // Increased from 100 to 180 (video height 110 + label + padding)
+
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'microPositions'), snap => {
       const docs = snap.docs.map(doc => {
@@ -75,91 +81,200 @@ export default function MicroGraphLocal() {
     return () => unsub();
   }, [setEdges]);
 
-  const onNodeClick: NodeMouseHandler = useCallback((_, node) => setSelectedNodeId(node.id), []);
-  const V_SPACING = 80;
-
-  const computePosition = useCallback(
-    (parentId: string | null, idx: number, count: number) => {
-      if (!parentId) return { x: 50 + idx * V_SPACING, y: 50 };
-      const parent = nodes.find(n => n.id === parentId)!;
-      return { x: ((idx + 1) / (count + 1)) * window.innerWidth, y: parent.position.y + V_SPACING };
-    },
-    [nodes]
-  );
-
-  // Replace the entire handleAddNode function:
-const handleAddNode = useCallback(async (data: {
-  name: string;
-  type?: NodeType;
-  youtubeId?: string;
-  start?: number;
-  end?: number;
-  loop?: boolean;
-}) => {
-  const nodeType = data.type ?? 'variant';
-  const youtubeId = data.youtubeId;
-  const { name, start, end, loop } = data;
-  
-  let parentId: string | null = null;
-  let depth = 0;
-
-  if (nodeType !== 'variant' && selectedNodeId) {
-    const selectedNode = nodes.find(n => n.id === selectedNodeId)!;
+  const calculateTreeLayout = useCallback(() => {
+    const nodePositions = new Map<string, { x: number; y: number }>();
     
-    // Check if we're adding the same type as the selected node
-    if (selectedNode.data.nodeType === nodeType) {
-      // Same type = sibling (same level, same parent)
-      parentId = selectedNode.data.parentId ?? null;
-      depth = selectedNode.data.depth;
-    } else {
-      // Different type = child (next level down)
-      parentId = selectedNodeId;
-      depth = selectedNode.data.depth + 1;
-    }
-  }
-
-  const siblings = nodes.filter(n => n.data.parentId === parentId && n.data.depth === depth);
-  const position = computePosition(parentId, siblings.length, siblings.length + 1);
-  
-  try {
-    const docRef = await addDoc(collection(db, 'microPositions'), {
-      label: name,
-      nodeType,
-      parentId,
-      depth,
-      position,
-      youtubeId,
-      start,
-      end,
-      loop,
-      createdAt: Timestamp.now(),
+    // Get all nodes grouped by depth
+    const nodesByDepth = new Map<number, Node<Data>[]>();
+    nodes.forEach(node => {
+      const depth = node.data.depth;
+      if (!nodesByDepth.has(depth)) {
+        nodesByDepth.set(depth, []);
+      }
+      nodesByDepth.get(depth)!.push(node);
     });
 
-    // Auto-connect to parent if not a root variant
-    if (parentId) {
-      await addDoc(collection(db, 'microEdges'), {
-        source: parentId,
-        target: docRef.id,
-        createdAt: Timestamp.now(),
-      });
-    } else if (nodeType !== 'variant' && selectedNodeId) {
-      // For siblings, connect to the same parent as the selected node
-      const selectedNode = nodes.find(n => n.id === selectedNodeId)!;
-      if (selectedNode.data.parentId) {
-        await addDoc(collection(db, 'microEdges'), {
-          source: selectedNode.data.parentId,
-          target: docRef.id,
-          createdAt: Timestamp.now(),
+    // Position nodes level by level
+    const maxDepth = Math.max(...Array.from(nodesByDepth.keys()));
+    
+    for (let depth = 0; depth <= maxDepth; depth++) {
+      const nodesAtDepth = nodesByDepth.get(depth) || [];
+      
+      if (depth === 0) {
+        // Root level - spread horizontally with more space
+        nodesAtDepth.forEach((node, index) => {
+          nodePositions.set(node.id, {
+            x: 200 + index * H_SPACING * 1.5, // Increased initial spacing
+            y: 80 // Increased top margin
+          });
+        });
+      } else {
+        // Group nodes by parent
+        const nodesByParent = new Map<string, Node<Data>[]>();
+        nodesAtDepth.forEach(node => {
+          const parentId = node.data.parentId || 'root';
+          if (!nodesByParent.has(parentId)) {
+            nodesByParent.set(parentId, []);
+          }
+          nodesByParent.get(parentId)!.push(node);
+        });
+
+        // Position children under each parent
+        nodesByParent.forEach((children, parentId) => {
+          const parentPos = nodePositions.get(parentId);
+          if (!parentPos) return;
+
+          const numChildren = children.length;
+          const totalWidth = (numChildren - 1) * H_SPACING;
+          const startX = parentPos.x - totalWidth / 2;
+
+          children.forEach((child, index) => {
+            nodePositions.set(child.id, {
+              x: startX + index * H_SPACING,
+              y: parentPos.y + V_SPACING
+            });
+          });
         });
       }
     }
 
-    setSelectedNodeId(docRef.id);
-    setAnnotationMode(false);
-  } catch (err) {
-    console.error('Error adding node:', err);
-  }
-}, [nodes, selectedNodeId, computePosition]);
+    return nodePositions;
+  }, [nodes, H_SPACING, V_SPACING]);
+
+  // Auto-reorganize tree layout when nodes change
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    
+    const positions = calculateTreeLayout();
+    const updatedNodes = nodes.map(node => ({
+      ...node,
+      position: positions.get(node.id) || node.position
+    }));
+    
+    // Only update if positions actually changed
+    const hasChanges = updatedNodes.some((node, index) => {
+      const oldPos = nodes[index]?.position;
+      const newPos = node.position;
+      return !oldPos || oldPos.x !== newPos.x || oldPos.y !== newPos.y;
+    });
+    
+    if (hasChanges) {
+      setNodes(updatedNodes);
+    }
+  }, [nodes.length, calculateTreeLayout]); // Only recalculate when node count changes
+
+  const reorganizeLayout = useCallback(() => {
+    const positions = calculateTreeLayout();
+    const updatedNodes = nodes.map(node => ({
+      ...node,
+      position: positions.get(node.id) || node.position
+    }));
+    setNodes(updatedNodes);
+  }, [nodes, calculateTreeLayout, setNodes]);
+
+  const onNodeClick: NodeMouseHandler = useCallback((_, node) => setSelectedNodeId(node.id), []);
+
+  const computePosition = useCallback(
+    (parentId: string | null, depth: number, siblingIndex: number) => {
+      if (!parentId) {
+        // Root nodes: spread horizontally at the top with more space
+        const rootNodes = nodes.filter(n => n.data.depth === 0);
+        return { x: 200 + rootNodes.length * H_SPACING * 1.5, y: 80 };
+      }
+      
+      const parent = nodes.find(n => n.id === parentId);
+      if (!parent) return { x: 200, y: 80 };
+      
+      // Get existing siblings with same parent
+      const siblings = nodes.filter(n => 
+        n.data.parentId === parentId && n.data.depth === depth
+      );
+      
+      // Calculate position for the new node
+      const totalSiblings = siblings.length + 1; // +1 for the new node
+      const totalWidth = (totalSiblings - 1) * H_SPACING;
+      const startX = parent.position.x - totalWidth / 2;
+      
+      return {
+        x: startX + siblingIndex * H_SPACING,
+        y: parent.position.y + V_SPACING
+      };
+    },
+    [nodes, H_SPACING, V_SPACING]
+  );
+
+  const handleAddNode = useCallback(async (data: {
+    name: string;
+    type?: NodeType;
+    youtubeId?: string;
+    start?: number;
+    end?: number;
+    loop?: boolean;
+  }) => {
+    const nodeType = data.type ?? 'variant';
+    const youtubeId = data.youtubeId;
+    const { name, start, end, loop } = data;
+    
+    let parentId: string | null = null;
+    let depth = 0;
+
+    if (nodeType !== 'variant' && selectedNodeId) {
+      const selectedNode = nodes.find(n => n.id === selectedNodeId)!;
+      
+      // Check if we're adding the same type as the selected node
+      if (selectedNode.data.nodeType === nodeType) {
+        // Same type = sibling (same level, same parent)
+        parentId = selectedNode.data.parentId ?? null;
+        depth = selectedNode.data.depth;
+      } else {
+        // Different type = child (next level down)
+        parentId = selectedNodeId;
+        depth = selectedNode.data.depth + 1;
+      }
+    }
+
+    const siblings = nodes.filter(n => n.data.parentId === parentId && n.data.depth === depth);
+    const position = computePosition(parentId, depth, siblings.length);
+    
+    try {
+      const docRef = await addDoc(collection(db, 'microPositions'), {
+        label: name,
+        nodeType,
+        parentId,
+        depth,
+        position,
+        youtubeId,
+        start,
+        end,
+        loop,
+        createdAt: Timestamp.now(),
+      });
+
+      // Auto-connect to parent if not a root variant
+      if (parentId) {
+        await addDoc(collection(db, 'microEdges'), {
+          source: parentId,
+          target: docRef.id,
+          createdAt: Timestamp.now(),
+        });
+      } else if (nodeType !== 'variant' && selectedNodeId) {
+        // For siblings, connect to the same parent as the selected node
+        const selectedNode = nodes.find(n => n.id === selectedNodeId)!;
+        if (selectedNode.data.parentId) {
+          await addDoc(collection(db, 'microEdges'), {
+            source: selectedNode.data.parentId,
+            target: docRef.id,
+            createdAt: Timestamp.now(),
+          });
+        }
+      }
+
+      setSelectedNodeId(docRef.id);
+      setAnnotationMode(false);
+    } catch (err) {
+      console.error('Error adding node:', err);
+    }
+  }, [nodes, selectedNodeId, computePosition]);
 
   // Persist manual connections to Firestore so edges snapshot updates
   const onConnectHandler = useCallback(async (connection: Connection) => {
@@ -227,16 +342,35 @@ const handleAddNode = useCallback(async (data: {
     }, []);
 
     return (
-      <div className="rounded overflow-hidden shadow">
+      <div className="rounded overflow-hidden shadow bg-white" style={{ minWidth: '180px' }}>
+        <Handle type="target" position={Position.Top} />
         {vid && (
           <YouTube videoId={vid} opts={opts} onReady={onReady} onPause={onPause} />
         )}
-        <p className="text-xs text-center font-semibold pt-1">{data.label}</p>
+        <p className="text-xs text-center font-semibold pt-2 pb-1 px-2">{data.label}</p>
+        <Handle type="source" position={Position.Bottom} />
       </div>
     );
   }, []);
 
-  const nodeTypes = useMemo(() => ({ videoNode: VideoNode }), [VideoNode]);
+  // Custom default node component with handles
+  const DefaultNode = useCallback(({ data }: NodeProps<Data>) => {
+    return (
+      <div 
+        className="px-4 py-3 shadow-md border-2 border-gray-300 rounded min-w-[120px]"
+        style={getNodeStyle(data.nodeType)}
+      >
+        <Handle type="target" position={Position.Top} />
+        <div className="text-sm font-medium text-center">{data.label}</div>
+        <Handle type="source" position={Position.Bottom} />
+      </div>
+    );
+  }, []);
+
+  const nodeTypes = useMemo(() => ({ 
+    videoNode: VideoNode,
+    default: DefaultNode 
+  }), [VideoNode, DefaultNode]);
 
   return (
     <div className="flex h-screen">
@@ -252,6 +386,13 @@ const handleAddNode = useCallback(async (data: {
           onClick={() => setAnnotationMode(m => !m)}
         >
           {annotationMode ? 'Manual Form' : 'Annotate Video'}
+        </button>
+        
+        <button
+          className="mt-2 ml-2 px-4 py-2 bg-green-600 text-white rounded"
+          onClick={reorganizeLayout}
+        >
+          Reorganize Tree
         </button>
 
         {annotationMode ? (
@@ -277,7 +418,7 @@ const handleAddNode = useCallback(async (data: {
 
         {selectedNodeId && (
           <p className="mt-4 text-sm text-gray-600">
-            Parent: <strong>{nodes.find(n => n.id === selectedNodeId)?.data.label}</strong>
+            Selected: <strong>{nodes.find(n => n.id === selectedNodeId)?.data.label}</strong>
           </p>
         )}
       </div>
@@ -292,6 +433,7 @@ const handleAddNode = useCallback(async (data: {
           onConnect={onConnectHandler}
           deleteKeyCode={['Delete', 'Backspace']}
           nodeTypes={nodeTypes}
+          connectionLineType={ConnectionLineType.SmoothStep}
           fitView
           style={{ width: '100%', height: '100%' }}
         />
